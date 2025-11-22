@@ -4,7 +4,9 @@ import { Icon } from './Icon';
 import { translations, Language } from '../translations';
 import { KnowledgeBase } from './KnowledgeBase';
 import { useKnowledge } from '../hooks/useKnowledge';
-import { AGENTS } from '../types';
+import { useAgents } from '../hooks/useAgents';
+import { AgentEditor } from './AgentEditor';
+import { AgentConfig } from '../types';
 
 interface AdminDashboardProps {
   onBack: () => void;
@@ -13,11 +15,23 @@ interface AdminDashboardProps {
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack, language }) => {
   const [activeTab, setActiveTab] = useState<'agents' | 'rag'>('agents');
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const t = translations[language];
   
   const { 
+    agents, 
+    saveDraft,
+    publishDraft,
+    discardDraft,
+    updateTestCases,
+    restoreVersion, 
+    createAgent 
+  } = useAgents();
+
+  const { 
     knowledgeBases,
     createKnowledgeBase,
+    updateKnowledgeBase,
     deleteKnowledgeBase,
     documents, 
     uploadDocument, 
@@ -25,11 +39,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack, language
     getStorageUsage, 
     updateDocumentStrategy, 
     startProcessing,
-    // Batch
     batchDeleteDocuments,
     batchUpdateStrategy,
     batchStartProcessing
   } = useKnowledge();
+
+  const selectedAgent = agents.find(a => a.id === selectedAgentId);
+
+  if (selectedAgent) {
+    return (
+      <div className="h-full w-full">
+        <AgentEditor 
+          agent={selectedAgent}
+          onSaveDraft={saveDraft}
+          onPublish={publishDraft}
+          onDiscardDraft={discardDraft}
+          onUpdateTestCases={updateTestCases}
+          onRestore={restoreVersion}
+          onClose={() => setSelectedAgentId(null)}
+          language={language}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full bg-slate-50 dark:bg-slate-950 overflow-hidden animate-in fade-in slide-in-from-right-4 duration-300">
@@ -86,6 +118,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack, language
           <KnowledgeBase 
             knowledgeBases={knowledgeBases}
             onCreateBase={createKnowledgeBase}
+            onUpdateBase={updateKnowledgeBase}
             onDeleteBase={deleteKnowledgeBase}
             documents={documents}
             onUpload={uploadDocument}
@@ -104,19 +137,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack, language
                <div className="flex items-center justify-between mb-8">
                  <div>
                    <h2 className="text-2xl font-bold text-slate-900 dark:text-white">{t.agentManagement}</h2>
-                   <p className="text-slate-500 dark:text-slate-400 mt-1">Configure system agents, prompts, and models.</p>
+                   <p className="text-slate-500 dark:text-slate-400 mt-1">Configure system agents, prompts, versions, and quality metrics.</p>
                  </div>
-                 <button className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-md transition-all">
+                 <button 
+                   onClick={() => {
+                     const newAgent: AgentConfig = {
+                        id: Date.now().toString(),
+                        name: 'New Agent',
+                        name_zh: '新智能体',
+                        description: 'Custom agent',
+                        description_zh: '自定义智能体',
+                        systemInstruction: 'You are a helpful assistant.',
+                        icon: 'Bot',
+                        color: 'text-slate-500',
+                        themeColor: 'blue',
+                        model: 'gemini-2.5-flash',
+                        promptVersions: [],
+                        currentVersion: 1
+                     };
+                     createAgent(newAgent);
+                     setSelectedAgentId(newAgent.id);
+                   }}
+                   className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg shadow-md transition-all"
+                 >
                    <Icon name="Plus" size={18} />
                    <span>{t.createNewAgent}</span>
                  </button>
                </div>
 
                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                 {AGENTS.map(agent => (
+                 {agents.map(agent => (
                    <div key={agent.id} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow relative group">
                       <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="p-2 text-slate-400 hover:text-primary-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">
+                        <button 
+                          onClick={() => setSelectedAgentId(agent.id)}
+                          className="p-2 text-slate-400 hover:text-primary-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg"
+                        >
                           <Icon name="Edit3" size={18} />
                         </button>
                       </div>
@@ -127,9 +183,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack, language
                         </div>
                         <div>
                           <h3 className="font-bold text-slate-900 dark:text-white text-lg">{language === 'zh' ? agent.name_zh : agent.name}</h3>
-                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-900 text-slate-500 uppercase tracking-wider mt-1">
-                             {agent.model}
-                          </span>
+                          <div className="flex items-center gap-2 mt-1">
+                             <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-900 text-slate-500 uppercase tracking-wider">
+                                {agent.model}
+                             </span>
+                             <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400 uppercase tracking-wider">
+                                v{agent.currentVersion || 1}
+                             </span>
+                             {agent.draftConfig && (
+                               <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 uppercase tracking-wider">
+                                 {t.draft}
+                               </span>
+                             )}
+                          </div>
                         </div>
                       </div>
                       
@@ -137,11 +203,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack, language
                         {language === 'zh' ? agent.description_zh : agent.description}
                       </p>
                       
-                      <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-100 dark:border-slate-700/50">
-                        <div className="text-xs font-semibold text-slate-500 mb-1 uppercase">System Instruction</div>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 font-mono line-clamp-2 opacity-70">
-                          {agent.systemInstruction}
-                        </p>
+                      {/* Mini Metrics */}
+                      <div className="flex items-center gap-4 pt-4 border-t border-slate-100 dark:border-slate-800">
+                         <div className="text-xs text-slate-500">
+                            <span className="font-bold text-slate-800 dark:text-slate-200">{agent.metrics?.qualityScore || 0}</span> Score
+                         </div>
+                         <div className="text-xs text-slate-500">
+                            <span className="font-bold text-slate-800 dark:text-slate-200">{agent.metrics?.satisfactionRate || 0}%</span> Sat.
+                         </div>
+                         <div className="text-xs text-slate-500">
+                            <span className="font-bold text-slate-800 dark:text-slate-200">{agent.metrics?.interactionCount || 0}</span> Chats
+                         </div>
                       </div>
                    </div>
                  ))}

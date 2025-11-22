@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
-import { useSmartPosition } from '../hooks/useSmartPosition';
 
 export interface SelectOption {
   value: string;
@@ -28,21 +28,68 @@ export const Select: React.FC<SelectProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  
-  // Use smart position with ~250px required space for dropdown
-  const position = useSmartPosition(containerRef, isOpen, 'bottom', 250);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
 
   const selectedOption = options.find(opt => opt.value === value);
 
+  // Calculate position and render via Portal
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
+    const updatePosition = () => {
+      if (isOpen && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const viewportHeight = window.innerHeight;
+        const spaceBelow = viewportHeight - rect.bottom;
+        const dropdownHeight = Math.min(options.length * 45 + 10, 250); // approx max height with padding
+
+        // Auto-flip logic: if less than 250px below and more space above, flip up
+        const flipUp = spaceBelow < dropdownHeight && rect.top > dropdownHeight;
+
+        setDropdownStyle({
+          position: 'fixed',
+          left: rect.left,
+          width: rect.width,
+          top: flipUp ? 'auto' : rect.bottom + 4,
+          bottom: flipUp ? viewportHeight - rect.top + 4 : 'auto',
+          zIndex: 9999, // High z-index to ensure it floats above modals and other layers
+          maxHeight: '250px'
+        });
       }
     };
+
+    if (isOpen) {
+      updatePosition();
+      // Capture scroll events from all parents to update position
+      window.addEventListener('scroll', updatePosition, true);
+      window.addEventListener('resize', updatePosition);
+    }
+
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [isOpen, options.length]);
+
+  // Handle click outside
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      // Check if clicked trigger
+      if (containerRef.current && containerRef.current.contains(event.target as Node)) {
+        return;
+      }
+      
+      // Check if clicked inside the dropdown portal
+      const target = event.target as Element;
+      if (target.closest('.select-dropdown-portal')) {
+        return;
+      }
+      
+      setIsOpen(false);
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [isOpen]);
 
   return (
     <div className={`relative ${className}`} ref={containerRef}>
@@ -66,13 +113,12 @@ export const Select: React.FC<SelectProps> = ({
         />
       </button>
 
-      {isOpen && !disabled && (
-        <div className={`absolute z-50 w-full min-w-[200px] right-0 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 ${
-          position === 'top' 
-            ? 'bottom-full mb-2 origin-bottom' 
-            : 'top-full mt-2 origin-top'
-        }`}>
-          <div className="max-h-60 overflow-auto p-1">
+      {isOpen && !disabled && createPortal(
+        <div 
+           className="select-dropdown-portal fixed bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col"
+           style={dropdownStyle}
+        >
+          <div className="overflow-y-auto p-1 custom-scrollbar">
             {options.map((option) => (
               <button
                 key={option.value}
@@ -97,7 +143,8 @@ export const Select: React.FC<SelectProps> = ({
               </button>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -70,6 +70,14 @@ export const useKnowledge = () => {
     return newBase.id;
   };
 
+  const updateKnowledgeBase = (id: string, name: string, description: string) => {
+    setKnowledgeBases(prev => prev.map(base => 
+      base.id === id 
+        ? { ...base, name, description, updatedAt: Date.now() }
+        : base
+    ));
+  };
+
   const deleteKnowledgeBase = (id: string) => {
     // Remove base
     setKnowledgeBases(prev => prev.filter(b => b.id !== id));
@@ -179,6 +187,7 @@ export const useKnowledge = () => {
   return {
     knowledgeBases,
     createKnowledgeBase,
+    updateKnowledgeBase,
     deleteKnowledgeBase,
     documents,
     uploadDocument,

@@ -1,8 +1,8 @@
 
 import { useState, useEffect } from 'react';
-import { Session, Message, AgentConfig, Attachment, Role, AGENTS } from '../types';
+import { Session, Message, AgentConfig, Attachment, Role } from '../types';
 import { streamGeminiResponse, generateChatSuggestions } from '../services/geminiService';
-import { Language, translations } from '../translations';
+import { Language } from '../translations';
 import { UserProfile } from '../types';
 
 const STORAGE_KEY = 'agno_chat_sessions';
@@ -13,16 +13,32 @@ const STORAGE_KEY = 'agno_chat_sessions';
  * 
  * @param {Language} language - Current UI language.
  * @param {UserProfile} userProfile - Current user profile for context if needed.
+ * @param {AgentConfig[]} agents - Dynamic list of agents from useAgents hook.
  * @returns {Object} Chat state and handler functions.
  */
-export const useChat = (language: Language, userProfile: UserProfile) => {
+export const useChat = (language: Language, userProfile: UserProfile, agents: AgentConfig[]) => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [activeAgent, setActiveAgent] = useState<AgentConfig>(AGENTS[0]);
-  const [modelId, setModelId] = useState<string>(AGENTS[0].model);
+  // Default to first agent in the list if available, else fallback object
+  const [activeAgent, setActiveAgent] = useState<AgentConfig>(agents[0] || { id: 'default', name: 'Loading...', model: 'gemini-2.5-flash' } as any);
+  const [modelId, setModelId] = useState<string>(agents[0]?.model || 'gemini-2.5-flash');
   const [isStreaming, setIsStreaming] = useState(false);
   const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  // Update active agent if the agents list updates (e.g. from admin edit) and we are viewing it
+  useEffect(() => {
+    if (activeAgent && agents.length > 0) {
+       const updated = agents.find(a => a.id === activeAgent.id);
+       if (updated) {
+         setActiveAgent(updated);
+         // Don't override modelId here automatically as user might have manually selected a different model
+       }
+    } else if (agents.length > 0 && !activeAgent.id) {
+       setActiveAgent(agents[0]);
+       setModelId(agents[0].model);
+    }
+  }, [agents]);
 
   // Derived state
   const currentSession = sessions.find(s => s.id === currentSessionId);
@@ -37,24 +53,25 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
         setSessions(parsed);
         if (parsed.length > 0) {
           setCurrentSessionId(parsed[0].id);
-          const agent = AGENTS.find(a => a.id === parsed[0].agentId) || AGENTS[0];
-          setActiveAgent(agent);
+          const agent = agents.find(a => a.id === parsed[0].agentId) || agents[0];
+          if (agent) setActiveAgent(agent);
         }
       } catch (e) {
         console.error("Failed to parse sessions", e);
       }
     }
-  }, []);
+  }, []); // Only run once on mount for loading sessions
 
   // Save sessions
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
   }, [sessions]);
 
-  // Sync model when agent changes
-  useEffect(() => {
-    setModelId(activeAgent.model);
-  }, [activeAgent.id]);
+  // Sync model when agent changes explicitly via UI, but we wrap it to avoid cycles
+  const changeAgent = (agent: AgentConfig) => {
+    setActiveAgent(agent);
+    setModelId(agent.model);
+  };
 
   // Clear suggestions when switching sessions
   useEffect(() => {
@@ -148,7 +165,6 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
         setIsStreaming(false);
         
         // Generate dynamic suggestions based on the actual conversation content
-        // We pass the history leading up to the response, plus the response itself
         const contextForSuggestions = [...chatHistory, { role: Role.USER, text, attachments } as Message];
         try {
           setIsGeneratingSuggestions(true);
@@ -217,12 +233,6 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
     await processGeminiRequest(sessionId, updatedMessages, text, attachments);
   };
 
-  /**
-   * Edits an existing user message and regenerates the response.
-   * 
-   * @param {string} messageId - The ID of the message to edit.
-   * @param {string} newText - The new text content.
-   */
   const handleEditMessage = async (messageId: string, newText: string) => {
     if (!currentSessionId) return;
     
@@ -248,14 +258,6 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
     );
   };
 
-  /**
-   * Deletes a single message or a message pair.
-   * Implements bidirectional deletion:
-   * 1. If a USER message is deleted -> Deletes subsequent MODEL response.
-   * 2. If a MODEL message is deleted -> Deletes preceding USER prompt.
-   * 
-   * @param {string} messageId - The ID of the message to delete.
-   */
   const handleDeleteMessage = (messageId: string) => {
     if (!currentSessionId) return;
     
@@ -265,42 +267,30 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
     const newMessages = [...messages];
     const msg = newMessages[msgIndex];
     
-    // Logic: Maintain conversational integrity by deleting pairs.
     if (msg.role === Role.USER) {
-      // Case 1: User message deleted -> Delete it AND the potential next AI response
       if (newMessages[msgIndex + 1]?.role === Role.MODEL) {
         newMessages.splice(msgIndex, 2);
       } else {
         newMessages.splice(msgIndex, 1);
       }
     } else if (msg.role === Role.MODEL) {
-      // Case 2: AI message deleted -> Delete it AND the potential preceding User prompt
       if (msgIndex > 0 && newMessages[msgIndex - 1]?.role === Role.USER) {
-        // Delete the previous message (User) and the current message (AI)
         newMessages.splice(msgIndex - 1, 2);
       } else {
         newMessages.splice(msgIndex, 1);
       }
     } else {
-      // Fallback (e.g., system messages)
       newMessages.splice(msgIndex, 1);
     }
 
     updateSessionMessages(currentSessionId, newMessages);
     
-    // If we deleted the last message, clear suggestions
     if (newMessages.length === 0 || newMessages[newMessages.length - 1].role === Role.USER) {
       setSuggestions([]);
       setIsGeneratingSuggestions(false);
     }
   };
 
-  /**
-   * Records user feedback (thumbs up/down) for a model message.
-   * 
-   * @param {string} messageId - ID of the message.
-   * @param {'up' | 'down'} type - Feedback type.
-   */
   const handleFeedback = (messageId: string, type: 'up' | 'down') => {
     if (!currentSessionId) return;
     setSessions(prev => prev.map(s => {
@@ -314,11 +304,6 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
     }));
   };
 
-  /**
-   * Deletes a specific session.
-   * 
-   * @param {string} sessionId - ID of the session to delete.
-   */
   const handleDeleteSession = (sessionId: string) => {
     const newSessions = sessions.filter(s => s.id !== sessionId);
     setSessions(newSessions);
@@ -327,9 +312,6 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
     }
   };
 
-  /**
-   * Clears all messages from the current session but keeps the session itself.
-   */
   const handleClearChat = () => {
     if (currentSessionId) {
       updateSessionMessages(currentSessionId, []);
@@ -343,9 +325,6 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
     setIsGeneratingSuggestions(false);
   };
 
-  /**
-   * Exports the current chat to a Markdown file and triggers a download.
-   */
   const handleExportChat = () => {
     if (!currentSessionId || messages.length === 0) return;
     
@@ -368,25 +347,18 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
     URL.revokeObjectURL(url);
   };
 
-  /**
-   * Resets current session selection to start a new chat.
-   */
   const handleNewChat = () => {
     setCurrentSessionId(null);
     setSuggestions([]);
     setIsGeneratingSuggestions(false);
   };
 
-  /**
-   * Selects an existing session and restores its agent and model settings.
-   * 
-   * @param {string} sessionId - The ID of the session to select.
-   */
   const handleSelectSession = (sessionId: string) => {
     const session = sessions.find(s => s.id === sessionId);
     if (session) {
       setCurrentSessionId(sessionId);
-      const savedAgent = AGENTS.find(a => a.id === session.agentId) || AGENTS[0];
+      // Ensure we find the agent from the dynamic list
+      const savedAgent = agents.find(a => a.id === session.agentId) || agents[0];
       setActiveAgent(savedAgent);
       setModelId(savedAgent.model); 
     }
@@ -398,7 +370,7 @@ export const useChat = (language: Language, userProfile: UserProfile) => {
     currentSessionId,
     messages,
     activeAgent,
-    setActiveAgent,
+    setActiveAgent: changeAgent,
     modelId,
     setModelId,
     isStreaming,

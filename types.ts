@@ -37,17 +37,57 @@ export interface UserProfile {
 
 export type ThemeColor = 'blue' | 'emerald' | 'violet' | 'amber' | 'rose';
 
+export interface PromptVersion {
+  version: number;
+  timestamp: number;
+  systemInstruction: string;
+  changeLog: string;
+  author?: string;
+}
+
+export interface AgentMetrics {
+  qualityScore: number; // 0-100, based on AI evaluation
+  interactionCount: number;
+  satisfactionRate: number; // 0-100, based on user thumbs up
+  lastEvaluatedAt?: number;
+}
+
+export interface TestCase {
+  id: string;
+  input: string;
+  expectedOutput?: string; // Optional "Golden Answer" for reference-based eval
+}
+
+export interface TestResult {
+  testCaseId: string;
+  actualOutput: string;
+  score: number;
+  pass: boolean;
+  reasoning: string;
+  timestamp: number;
+}
+
 export interface AgentConfig {
   id: string;
   name: string;
   name_zh: string;
   description: string;
   description_zh: string;
-  systemInstruction: string;
+  systemInstruction: string; // The "Live" prompt
   icon: string;
   color: string;
   themeColor: ThemeColor;
   model: string;
+  
+  // Version Control & Evaluation
+  promptVersions?: PromptVersion[];
+  currentVersion?: number;
+  metrics?: AgentMetrics;
+  
+  // AgentOps / Dev Mode
+  draftConfig?: Partial<AgentConfig>; // Work-in-progress changes
+  testCases?: TestCase[];
+  lastTestResults?: TestResult[];
 }
 
 export interface ModelOption {
@@ -102,7 +142,7 @@ export const AVAILABLE_MODELS: ModelOption[] = [
   },
 ];
 
-export const AGENTS: AgentConfig[] = [
+export const DEFAULT_AGENTS: AgentConfig[] = [
   {
     id: 'general',
     name: 'Orchestrator',
@@ -113,7 +153,10 @@ export const AGENTS: AgentConfig[] = [
     icon: 'Cpu',
     color: 'text-blue-500',
     themeColor: 'blue',
-    model: 'gemini-2.5-flash'
+    model: 'gemini-2.5-flash',
+    promptVersions: [],
+    currentVersion: 1,
+    metrics: { qualityScore: 95, interactionCount: 120, satisfactionRate: 98 }
   },
   {
     id: 'developer',
@@ -125,7 +168,10 @@ export const AGENTS: AgentConfig[] = [
     icon: 'Terminal',
     color: 'text-emerald-500',
     themeColor: 'emerald',
-    model: 'gemini-2.5-flash'
+    model: 'gemini-2.5-flash',
+    promptVersions: [],
+    currentVersion: 1,
+    metrics: { qualityScore: 92, interactionCount: 85, satisfactionRate: 95 }
   },
   {
     id: 'creative',
@@ -137,7 +183,10 @@ export const AGENTS: AgentConfig[] = [
     icon: 'Palette',
     color: 'text-violet-500',
     themeColor: 'violet',
-    model: 'gemini-2.5-flash'
+    model: 'gemini-2.5-flash',
+    promptVersions: [],
+    currentVersion: 1,
+    metrics: { qualityScore: 88, interactionCount: 45, satisfactionRate: 90 }
   },
   {
     id: 'analyst',
@@ -149,7 +198,10 @@ export const AGENTS: AgentConfig[] = [
     icon: 'BarChart',
     color: 'text-amber-500',
     themeColor: 'amber',
-    model: 'gemini-2.5-flash'
+    model: 'gemini-2.5-flash',
+    promptVersions: [],
+    currentVersion: 1,
+    metrics: { qualityScore: 94, interactionCount: 60, satisfactionRate: 92 }
   },
   {
     id: 'writer',
@@ -161,6 +213,12 @@ export const AGENTS: AgentConfig[] = [
     icon: 'Feather',
     color: 'text-rose-500',
     themeColor: 'rose',
-    model: 'gemini-2.5-flash'
+    model: 'gemini-2.5-flash',
+    promptVersions: [],
+    currentVersion: 1,
+    metrics: { qualityScore: 90, interactionCount: 30, satisfactionRate: 100 }
   }
 ];
+
+// Export alias for backward compatibility if needed, but prefer DEFAULT_AGENTS for clarity
+export const AGENTS = DEFAULT_AGENTS;

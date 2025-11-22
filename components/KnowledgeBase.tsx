@@ -5,10 +5,15 @@ import { Select } from './Select';
 import { KnowledgeDocument, KnowledgeStatus, ChunkingStrategy, KnowledgeBaseItem } from '../types';
 import { translations, Language } from '../translations';
 import { ConfirmationModal } from './ConfirmationModal';
+import { Tooltip } from './Tooltip';
+import { Pagination } from './Pagination';
+import { DataList } from './DataList';
+import { StatusBadge, StatusType } from './StatusBadge';
 
 interface KnowledgeBaseProps {
   knowledgeBases: KnowledgeBaseItem[];
-  onCreateBase: (name: string, desc: string) => void;
+  onCreateBase: (name: string, desc: string) => string;
+  onUpdateBase: (id: string, name: string, desc: string) => void;
   onDeleteBase: (id: string) => void;
   documents: KnowledgeDocument[]; // All docs, but we usually filter by selected base
   onUpload: (baseId: string, file: File) => void;
@@ -25,9 +30,13 @@ interface KnowledgeBaseProps {
   language: Language;
 }
 
+type SortField = 'date' | 'name' | 'size';
+type SortOrder = 'asc' | 'desc';
+
 export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
   knowledgeBases,
   onCreateBase,
+  onUpdateBase,
   onDeleteBase,
   documents,
   onUpload,
@@ -41,11 +50,26 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
   language
 }) => {
   const [selectedBaseId, setSelectedBaseId] = useState<string | null>(knowledgeBases.length > 0 ? knowledgeBases[0].id : null);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [newBaseName, setNewBaseName] = useState('');
-  const [newBaseDesc, setNewBaseDesc] = useState('');
+  
+  // Modal States
+  const [isBaseModalOpen, setIsBaseModalOpen] = useState(false);
+  const [editingBaseId, setEditingBaseId] = useState<string | null>(null); // If null, creating mode
+  const [baseFormName, setBaseFormName] = useState('');
+  const [baseFormDesc, setBaseFormDesc] = useState('');
+  
   const [deleteBaseId, setDeleteBaseId] = useState<string | null>(null);
   
+  // Search & Filter State
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // Sorting State
+  const [sortField, setSortField] = useState<SortField>('date');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
   // Batch Selection State
   const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
   
@@ -61,15 +85,58 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
     }
   }, [knowledgeBases, selectedBaseId]);
 
-  // Clear selection when base changes
+  // Reset states when base changes
   useEffect(() => {
     setSelectedDocIds([]);
+    setSearchQuery('');
+    setCurrentPage(1);
+    setSortField('date');
+    setSortOrder('desc');
   }, [selectedBaseId]);
 
-  // Filter docs for current view
-  const currentDocs = selectedBaseId 
-  ? documents.filter(doc => doc.knowledgeBaseId === selectedBaseId) 
+  // Reset page when search query changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
+
+  // 1. Filter Logic
+  const filteredDocs = selectedBaseId 
+  ? documents.filter(doc => {
+      const matchesBase = doc.knowledgeBaseId === selectedBaseId;
+      const matchesSearch = doc.name.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesBase && matchesSearch;
+    }) 
   : [];
+
+  // 2. Sort Logic
+  const sortedDocs = [...filteredDocs].sort((a, b) => {
+    let comparison = 0;
+    switch (sortField) {
+      case 'name':
+        comparison = a.name.localeCompare(b.name);
+        break;
+      case 'size':
+        comparison = a.size - b.size;
+        break;
+      case 'date':
+      default:
+        // Use uploadedAt or a fallback
+        comparison = (a.uploadedAt || 0) - (b.uploadedAt || 0);
+        break;
+    }
+    return sortOrder === 'asc' ? comparison : -comparison;
+  });
+
+  // 3. Pagination Logic
+  const totalPages = Math.ceil(sortedDocs.length / itemsPerPage);
+  const paginatedDocs = sortedDocs.slice(
+    (currentPage - 1) * itemsPerPage, 
+    currentPage * itemsPerPage
+  );
+
+  // Pagination Helpers
+  const goToNextPage = () => setCurrentPage(p => Math.min(p + 1, totalPages));
+  const goToPrevPage = () => setCurrentPage(p => Math.max(p - 1, 1));
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -91,21 +158,44 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleCreateBase = (e: React.FormEvent) => {
+  // Open Modal for Create
+  const openCreateModal = () => {
+    setEditingBaseId(null);
+    setBaseFormName('');
+    setBaseFormDesc('');
+    setIsBaseModalOpen(true);
+  };
+
+  // Open Modal for Edit
+  const openEditModal = (e: React.MouseEvent, base: KnowledgeBaseItem) => {
+    e.stopPropagation();
+    setEditingBaseId(base.id);
+    setBaseFormName(base.name);
+    setBaseFormDesc(base.description);
+    setIsBaseModalOpen(true);
+  };
+
+  const handleBaseSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newBaseName.trim()) {
-      onCreateBase(newBaseName.trim(), newBaseDesc.trim());
-      setNewBaseName('');
-      setNewBaseDesc('');
-      setIsCreateModalOpen(false);
+    if (!baseFormName.trim()) return;
+
+    if (editingBaseId) {
+      onUpdateBase(editingBaseId, baseFormName.trim(), baseFormDesc.trim());
+    } else {
+      const newId = onCreateBase(baseFormName.trim(), baseFormDesc.trim());
+      setSelectedBaseId(newId); // Auto select new base
     }
+    
+    setIsBaseModalOpen(false);
+    setBaseFormName('');
+    setBaseFormDesc('');
   };
 
   const toggleSelectAll = () => {
-    if (selectedDocIds.length === currentDocs.length && currentDocs.length > 0) {
+    if (selectedDocIds.length === filteredDocs.length && filteredDocs.length > 0) {
       setSelectedDocIds([]);
     } else {
-      setSelectedDocIds(currentDocs.map(d => d.id));
+      setSelectedDocIds(filteredDocs.map(d => d.id));
     }
   };
 
@@ -145,12 +235,15 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
-  const getStatusColor = (status: KnowledgeStatus) => {
+  const mapStatusToBadgeType = (status: KnowledgeStatus): StatusType => {
     switch (status) {
-      case 'ready': return 'text-emerald-500 bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-800';
-      case 'error': return 'text-red-500 bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-800';
-      case 'uploaded': return 'text-amber-600 bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-800';
-      default: return 'text-blue-500 bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-800';
+      case 'ready': return 'success';
+      case 'error': return 'error';
+      case 'uploaded': return 'warning'; // or 'neutral'
+      case 'processing': 
+      case 'indexing': 
+      case 'uploading': return 'info';
+      default: return 'neutral';
     }
   };
 
@@ -164,6 +257,18 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
         case 'error': return t.error;
     }
   };
+  
+  const getStatusIcon = (status: KnowledgeStatus) => {
+    switch(status) {
+        case 'uploaded': return 'Clock';
+        case 'processing': 
+        case 'indexing': 
+        case 'uploading': return 'Loader2';
+        case 'ready': return 'CheckCircle2';
+        case 'error': return 'AlertCircle';
+        default: return undefined;
+    }
+  };
 
   const chunkingOptions = [
     { value: 'fixed', label: t.chunkingStrategies.fixed.title, description: t.chunkingStrategies.fixed.desc },
@@ -171,81 +276,101 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
     { value: 'hierarchical', label: t.chunkingStrategies.hierarchical.title, description: t.chunkingStrategies.hierarchical.desc },
   ];
 
-  return (
-    <div className="flex h-full bg-slate-50 dark:bg-slate-950">
-      <ConfirmationModal 
-        isOpen={!!deleteBaseId}
-        title={t.deleteBaseTitle}
-        message={t.deleteBaseMsg}
-        onConfirm={() => {
-          if (deleteBaseId) onDeleteBase(deleteBaseId);
-          setDeleteBaseId(null);
-        }}
-        onCancel={() => setDeleteBaseId(null)}
-      />
+  // Render function for the DataList
+  const renderDocItem = (doc: KnowledgeDocument) => (
+    <div 
+      className={`border rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center gap-4 shadow-sm transition-all relative overflow-visible group z-10 ${
+         selectedDocIds.includes(doc.id)
+           ? 'bg-primary-50/50 dark:bg-primary-900/20 border-primary-200 dark:border-primary-800'
+           : 'bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 hover:shadow-md'
+      }`}
+    >
+      
+      {/* Selection Checkbox */}
+      <div className="flex items-center h-full" onClick={() => toggleSelectDoc(doc.id)}>
+         <div className={`w-5 h-5 rounded-md border cursor-pointer flex items-center justify-center transition-colors ${
+            selectedDocIds.includes(doc.id)
+              ? 'bg-primary-600 border-primary-600 text-white'
+              : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:border-primary-400'
+         }`}>
+            {selectedDocIds.includes(doc.id) && <Icon name="Check" size={12} />}
+         </div>
+      </div>
 
-      {/* Create Base Modal */}
-      {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-800">
-            <form onSubmit={handleCreateBase} className="p-6">
-              <div className="flex items-center justify-between mb-6">
-                 <h3 className="text-lg font-bold text-slate-800 dark:text-white">{t.createNewBase}</h3>
-                 <button type="button" onClick={() => setIsCreateModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                   <Icon name="X" size={20} />
-                 </button>
-              </div>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">{t.baseName}</label>
-                  <input 
-                    type="text" 
-                    value={newBaseName}
-                    onChange={e => setNewBaseName(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none text-sm text-slate-900 dark:text-white"
-                    placeholder="e.g., Engineering Docs"
-                    autoFocus
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">{t.baseDesc}</label>
-                  <textarea 
-                    value={newBaseDesc}
-                    onChange={e => setNewBaseDesc(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none text-sm text-slate-900 dark:text-white resize-none h-24"
-                    placeholder="Optional description..."
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 mt-8">
-                <button 
-                  type="button"
-                  onClick={() => setIsCreateModalOpen(false)}
-                  className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
-                >
-                  {t.cancel}
-                </button>
-                <button
-                  type="submit"
-                  disabled={!newBaseName.trim()}
-                  className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg shadow-lg shadow-primary-600/20 disabled:opacity-50"
-                >
-                  {t.create}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+      {/* Progress Bar Background */}
+      {doc.status !== 'ready' && doc.status !== 'error' && doc.status !== 'uploaded' && (
+         <div 
+           className="absolute bottom-0 left-0 h-1 bg-primary-500 transition-all duration-300 rounded-bl-xl" 
+           style={{ width: `${doc.progress}%` }}
+         ></div>
       )}
 
+      <div className="flex items-center gap-4 w-full sm:w-auto flex-1 cursor-pointer" onClick={() => toggleSelectDoc(doc.id)}>
+          <div className="w-10 h-10 rounded-lg bg-slate-100 dark:bg-slate-700 flex items-center justify-center text-slate-500 dark:text-slate-400 shrink-0 font-bold text-xs uppercase">
+            {doc.type}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <h4 className={`font-medium truncate ${selectedDocIds.includes(doc.id) ? 'text-primary-900 dark:text-primary-100' : 'text-slate-900 dark:text-white'}`}>{doc.name}</h4>
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              <span>{formatSize(doc.size)}</span>
+              <span>•</span>
+              <span>{new Date(doc.uploadedAt).toLocaleDateString()} {new Date(doc.uploadedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+            </div>
+          </div>
+      </div>
+
+      {/* Action Row */}
+      <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end mt-2 sm:mt-0">
+          
+          <div className="w-32 sm:w-40">
+             <Select
+               value={doc.chunkingStrategy}
+               options={chunkingOptions}
+               onChange={(val) => onUpdateStrategy(doc.id, val as ChunkingStrategy)}
+               disabled={doc.status === 'processing' || doc.status === 'indexing'}
+             />
+          </div>
+
+          <StatusBadge 
+            status={mapStatusToBadgeType(doc.status)} 
+            text={getStatusText(doc.status)} 
+            icon={getStatusIcon(doc.status)}
+            className="min-w-[100px]"
+          />
+
+          <div className="flex items-center gap-1">
+              {(doc.status === 'uploaded' || doc.status === 'ready' || doc.status === 'error') && (
+                <button
+                  onClick={() => onStartProcessing(doc.id)}
+                  className="p-2 text-primary-600 hover:text-primary-700 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-lg transition-colors"
+                  title={doc.status === 'uploaded' ? t.startParsing : t.reparse}
+                >
+                  <Icon name={doc.status === 'uploaded' ? "Play" : "RotateCw"} size={16} />
+                </button>
+              )}
+
+              <button 
+                onClick={() => onDeleteDoc(doc.id)}
+                className="p-2 text-slate-400 hover:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                title={t.delete}
+              >
+                <Icon name="Trash2" size={16} />
+              </button>
+          </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full bg-slate-50 dark:bg-slate-950">
+      
       {/* Sidebar - Knowledge Bases List */}
       <div className="w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-10">
         <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <h2 className="font-bold text-slate-800 dark:text-slate-100 text-sm uppercase tracking-wider">{t.knowledgeBases}</h2>
           <button 
-            onClick={() => setIsCreateModalOpen(true)}
+            onClick={openCreateModal}
             className="p-1.5 text-primary-600 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-lg transition-colors"
             title={t.createNewBase}
           >
@@ -283,16 +408,26 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
                    </div>
                  </button>
                  
-                 {/* Delete Base Button */}
-                 <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDeleteBaseId(base.id);
-                    }}
-                    className={`absolute top-3 right-3 p-1 text-slate-400 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity ${selectedBaseId === base.id ? 'opacity-100' : ''}`}
-                 >
-                   <Icon name="Trash2" size={14} />
-                 </button>
+                 {/* Action Buttons (Edit & Delete) */}
+                 <div className={`absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ${selectedBaseId === base.id ? 'opacity-100' : ''}`}>
+                   <button 
+                      onClick={(e) => openEditModal(e, base)}
+                      className="p-1 text-slate-400 hover:text-primary-500 rounded bg-white/50 dark:bg-black/20 backdrop-blur-sm"
+                      title="Edit"
+                   >
+                     <Icon name="Edit2" size={14} />
+                   </button>
+                   <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteBaseId(base.id);
+                      }}
+                      className="p-1 text-slate-400 hover:text-red-500 rounded bg-white/50 dark:bg-black/20 backdrop-blur-sm"
+                      title="Delete"
+                   >
+                     <Icon name="Trash2" size={14} />
+                   </button>
+                 </div>
                </div>
              );
           })}
@@ -352,129 +487,94 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
                   </div>
                 </div>
 
-                {/* Toolbar (Select All) */}
-                {currentDocs.length > 0 && (
-                  <div className="flex items-center justify-between mb-3 px-2">
+                {/* Toolbar: Select All, Sort, Search */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 px-1 gap-4">
+                   <div className="flex items-center gap-4">
+                     {/* Select All Button */}
                      <button 
                        onClick={toggleSelectAll}
-                       className="text-xs font-medium text-slate-500 hover:text-primary-600 flex items-center gap-2 transition-colors"
+                       disabled={filteredDocs.length === 0}
+                       className="text-xs font-medium text-slate-500 hover:text-primary-600 flex items-center gap-2 transition-colors disabled:opacity-50"
                      >
                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${
-                          selectedDocIds.length === currentDocs.length && currentDocs.length > 0
+                          selectedDocIds.length === filteredDocs.length && filteredDocs.length > 0
                             ? 'bg-primary-600 border-primary-600 text-white'
                             : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800'
                        }`}>
-                          {selectedDocIds.length === currentDocs.length && currentDocs.length > 0 && <Icon name="Check" size={10} />}
+                          {selectedDocIds.length === filteredDocs.length && filteredDocs.length > 0 && <Icon name="Check" size={10} />}
                        </div>
-                       {selectedDocIds.length === currentDocs.length && currentDocs.length > 0 ? t.deselectAll : t.selectAll}
+                       {selectedDocIds.length === filteredDocs.length && filteredDocs.length > 0 ? t.deselectAll : t.selectAll}
                      </button>
-                     <span className="text-xs text-slate-400">
-                       {currentDocs.length} {t.items}
-                     </span>
-                  </div>
-                )}
 
-                {/* Documents List */}
-                <div className="flex-1 overflow-y-auto space-y-3 pb-20">
-                  {currentDocs.length === 0 ? (
-                    <div className="text-center py-12 text-slate-400">
-                      <Icon name="FileText" size={48} className="mx-auto mb-4 opacity-20" />
-                      <p>{t.noDocs}</p>
-                    </div>
-                  ) : (
-                    currentDocs.map(doc => (
-                      <div 
-                        key={doc.id} 
-                        className={`border rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center gap-4 shadow-sm transition-all relative overflow-visible group z-10 ${
-                           selectedDocIds.includes(doc.id)
-                             ? 'bg-primary-50/50 dark:bg-primary-900/20 border-primary-200 dark:border-primary-800'
-                             : 'bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 hover:shadow-md'
-                        }`}
-                      >
-                        
-                        {/* Selection Checkbox */}
-                        <div className="flex items-center h-full" onClick={() => toggleSelectDoc(doc.id)}>
-                           <div className={`w-5 h-5 rounded-md border cursor-pointer flex items-center justify-center transition-colors ${
-                              selectedDocIds.includes(doc.id)
-                                ? 'bg-primary-600 border-primary-600 text-white'
-                                : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:border-primary-400'
-                           }`}>
-                              {selectedDocIds.includes(doc.id) && <Icon name="Check" size={12} />}
-                           </div>
-                        </div>
+                     {/* Divider */}
+                     <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 hidden sm:block"></div>
 
-                        {/* Progress Bar Background */}
-                        {doc.status !== 'ready' && doc.status !== 'error' && doc.status !== 'uploaded' && (
-                           <div 
-                             className="absolute bottom-0 left-0 h-1 bg-primary-500 transition-all duration-300 rounded-bl-xl" 
-                             style={{ width: `${doc.progress}%` }}
-                           ></div>
-                        )}
+                     {/* Sort Controls */}
+                     <div className="flex items-center gap-2">
+                        <Select 
+                           value={sortField}
+                           onChange={(val) => setSortField(val as SortField)}
+                           options={[
+                             { value: 'date', label: t.sortDate },
+                             { value: 'name', label: t.sortName },
+                             { value: 'size', label: t.sortSize },
+                           ]}
+                           className="w-24"
+                           placeholder={t.sortBy}
+                        />
+                        <Tooltip content={sortOrder === 'asc' ? 'Ascending' : 'Descending'}>
+                          <button 
+                             onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                             className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-primary-600 transition-colors"
+                          >
+                             <Icon name={sortOrder === 'asc' ? "ArrowUpNarrowWide" : "ArrowDownNarrowWide"} size={16} />
+                          </button>
+                        </Tooltip>
+                     </div>
+                   </div>
 
-                        <div className="flex items-center gap-4 w-full sm:w-auto flex-1 cursor-pointer" onClick={() => toggleSelectDoc(doc.id)}>
-                            <div className="w-10 h-10 rounded-lg bg-slate-100 dark:bg-slate-700 flex items-center justify-center text-slate-500 dark:text-slate-400 shrink-0 font-bold text-xs uppercase">
-                              {doc.type}
-                            </div>
-
-                            <div className="flex-1 min-w-0">
-                              <h4 className={`font-medium truncate ${selectedDocIds.includes(doc.id) ? 'text-primary-900 dark:text-primary-100' : 'text-slate-900 dark:text-white'}`}>{doc.name}</h4>
-                              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                                <span>{formatSize(doc.size)}</span>
-                                <span>•</span>
-                                <span>{new Date(doc.uploadedAt).toLocaleDateString()}</span>
-                              </div>
-                            </div>
-                        </div>
-
-                        {/* Action Row */}
-                        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end mt-2 sm:mt-0">
-                            
-                            <div className="w-32 sm:w-40">
-                               <Select
-                                 value={doc.chunkingStrategy}
-                                 options={chunkingOptions}
-                                 onChange={(val) => onUpdateStrategy(doc.id, val as ChunkingStrategy)}
-                                 disabled={doc.status === 'processing' || doc.status === 'indexing'}
-                               />
-                            </div>
-
-                            <div className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border flex items-center gap-1.5 min-w-[100px] justify-center ${getStatusColor(doc.status)}`}>
-                              {doc.status === 'processing' || doc.status === 'indexing' ? (
-                                <Icon name="Loader2" size={12} className="animate-spin" />
-                              ) : doc.status === 'ready' ? (
-                                <Icon name="CheckCircle2" size={12} />
-                              ) : doc.status === 'error' ? (
-                                <Icon name="AlertCircle" size={12} />
-                              ) : (
-                                <Icon name="Clock" size={12} />
-                              )}
-                              <span className="hidden md:inline whitespace-nowrap">{getStatusText(doc.status)}</span>
-                            </div>
-
-                            <div className="flex items-center gap-1">
-                                {(doc.status === 'uploaded' || doc.status === 'ready' || doc.status === 'error') && (
-                                  <button
-                                    onClick={() => onStartProcessing(doc.id)}
-                                    className="p-2 text-primary-600 hover:text-primary-700 hover:bg-primary-50 dark:hover:bg-primary-900/20 rounded-lg transition-colors"
-                                    title={doc.status === 'uploaded' ? t.startParsing : t.reparse}
-                                  >
-                                    <Icon name={doc.status === 'uploaded' ? "Play" : "RotateCw"} size={16} />
-                                  </button>
-                                )}
-
-                                <button 
-                                  onClick={() => onDeleteDoc(doc.id)}
-                                  className="p-2 text-slate-400 hover:text-red-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
-                                  title={t.delete}
-                                >
-                                  <Icon name="Trash2" size={16} />
-                                </button>
-                            </div>
-                        </div>
-                      </div>
-                    ))
-                  )}
+                   {/* Search Bar */}
+                   <div className="relative group max-w-xs w-full sm:w-48">
+                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                       <Icon name="Search" size={14} className="text-slate-400 group-focus-within:text-primary-500 transition-colors" />
+                     </div>
+                     <input
+                       type="text"
+                       value={searchQuery}
+                       onChange={(e) => setSearchQuery(e.target.value)}
+                       placeholder="Search docs..."
+                       className="w-full pl-9 pr-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 outline-none transition-all"
+                     />
+                   </div>
                 </div>
+
+                {/* Documents DataList */}
+                <DataList<KnowledgeDocument>
+                   data={paginatedDocs}
+                   renderItem={renderDocItem}
+                   keyExtractor={(doc) => doc.id}
+                   emptyMessage={t.noDocs}
+                   onClearSearch={() => setSearchQuery('')}
+                   isSearching={!!searchQuery}
+                />
+
+                {/* Pagination Footer */}
+                <Pagination 
+                   currentPage={currentPage}
+                   totalPages={totalPages}
+                   totalItems={sortedDocs.length}
+                   itemsPerPage={itemsPerPage}
+                   onPageChange={setCurrentPage}
+                   onNext={goToNextPage}
+                   onPrev={goToPrevPage}
+                   translations={{
+                     showing: t.showing,
+                     to: t.to,
+                     of: t.of,
+                     items: t.items,
+                     page: t.page
+                   }}
+                />
 
                 {/* Floating Batch Action Bar */}
                 {selectedDocIds.length > 0 && (
@@ -536,6 +636,76 @@ export const KnowledgeBase: React.FC<KnowledgeBaseProps> = ({
            </div>
          )}
       </div>
+
+      {/* Create/Edit Base Modal - moved to end to ensure proper stacking if simultaneous modals occur (rare) */}
+      {isBaseModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-800 relative">
+            <form onSubmit={handleBaseSubmit} className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                 <h3 className="text-lg font-bold text-slate-800 dark:text-white">
+                   {editingBaseId ? 'Edit Knowledge Base' : t.createNewBase}
+                 </h3>
+                 <button type="button" onClick={() => setIsBaseModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                   <Icon name="X" size={20} />
+                 </button>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">{t.baseName}</label>
+                  <input 
+                    type="text" 
+                    value={baseFormName}
+                    onChange={e => setBaseFormName(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none text-sm text-slate-900 dark:text-white"
+                    placeholder="e.g., Engineering Docs"
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1.5">{t.baseDesc}</label>
+                  <textarea 
+                    value={baseFormDesc}
+                    onChange={e => setBaseFormDesc(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none text-sm text-slate-900 dark:text-white resize-none h-24"
+                    placeholder="Optional description..."
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 mt-8">
+                <button 
+                  type="button"
+                  onClick={() => setIsBaseModalOpen(false)}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="submit"
+                  disabled={!baseFormName.trim()}
+                  className="px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg shadow-lg shadow-primary-600/20 disabled:opacity-50"
+                >
+                  {editingBaseId ? t.save : t.create}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal - Last in DOM to be on top */}
+      <ConfirmationModal 
+        isOpen={!!deleteBaseId}
+        title={t.deleteBaseTitle}
+        message={t.deleteBaseMsg}
+        onConfirm={() => {
+          if (deleteBaseId) onDeleteBase(deleteBaseId);
+          setDeleteBaseId(null);
+        }}
+        onCancel={() => setDeleteBaseId(null)}
+      />
     </div>
   );
 };

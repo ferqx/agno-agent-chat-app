@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { AGENTS, Role, ThemeColor, AgentConfig } from '../types';
+import { Role, ThemeColor, AgentConfig } from '../types';
 import { AgentSelector } from '../components/AgentSelector';
 import { ChatInput } from '../components/ChatInput';
 import { MessageBubble } from '../components/MessageBubble';
@@ -16,6 +16,7 @@ import { Tooltip } from '../components/Tooltip';
 import { useTheme } from '../hooks/useTheme';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useChat } from '../hooks/useChat';
+import { useAgents } from '../hooks/useAgents';
 
 // Color palettes for dynamic theming
 const THEME_COLORS: Record<ThemeColor, Record<string, string>> = {
@@ -74,6 +75,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({ onLogout }) => {
 
   const { themeMode, toggleTheme, getThemeIcon, getThemeTitle } = useTheme(language);
   const { userProfile, saveUserProfile } = useUserProfile();
+  
+  // Load dynamic agents
+  const { agents } = useAgents();
 
   const {
     sessions,
@@ -96,7 +100,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({ onLogout }) => {
     handleExportChat,
     handleNewChat,
     handleSelectSession
-  } = useChat(language, userProfile);
+  } = useChat(language, userProfile, agents); // Pass dynamic agents
 
   const t = translations[language];
 
