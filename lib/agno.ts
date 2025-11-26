@@ -1,3 +1,4 @@
+
 import { AgnoAgent, AgnoSession, AgnoMessage, AgnoTeam, RunContent, RunCompleted } from '../types';
 
 export class AgnoClient {
@@ -17,10 +18,7 @@ export class AgnoClient {
         ? `http://${normalized}`
         : `https://${normalized}`;
     }
-    // Ensure /v1 if typical Agno setup and not already present
-    if (!normalized.endsWith('/v1')) {
-      normalized = `${normalized}/v1`;
-    }
+    // removed automatic /v1 appending based on user request
     return normalized;
   }
 
