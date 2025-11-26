@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { AgentConfig, Message, Role, KnowledgeBaseItem } from '../types';
 import { Icon } from './Icon';
@@ -6,14 +5,14 @@ import { translations, Language } from '../translations';
 import { DiffViewer } from './DiffViewer';
 import { ChatInput } from './ChatInput';
 import { MessageBubble } from './MessageBubble';
-import { streamGeminiResponse } from '../services/geminiService';
 import { EvaluationPanel } from './EvaluationPanel';
 import { Select } from './Select';
+import { AgnoClient } from '../lib/agno';
 
 interface AgentEditorProps {
   agent: AgentConfig;
-  allAgents?: AgentConfig[]; // Pass all agents for sub-agent selection
-  knowledgeBases?: KnowledgeBaseItem[]; // Optional prop for KB selection
+  allAgents?: AgentConfig[];
+  knowledgeBases?: KnowledgeBaseItem[];
   onSaveDraft: (id: string, updates: Partial<AgentConfig>) => void;
   onPublish: (id: string, changeLog: string) => void;
   onDiscardDraft: (id: string) => void;
@@ -32,14 +31,12 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
   onSaveDraft,
   onPublish,
   onDiscardDraft,
-  onUpdateTestCases,
   onRestore,
   onClose,
   language
 }) => {
   const t = translations[language];
   
-  // Local State for form inputs (mirroring draft or live)
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
   const [instruction, setInstruction] = useState('');
@@ -49,13 +46,11 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
   
   const [activeTab, setActiveTab] = useState<EditorTab>('config');
   
-  // Playground State
   const [playMessages, setPlayMessages] = useState<Message[]>([]);
   const [isPlayStreaming, setIsPlayStreaming] = useState(false);
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [changeLog, setChangeLog] = useState('');
 
-  // Load initial state from Draft if exists, else Live
   useEffect(() => {
     const source = agent.draftConfig || agent;
     setName(language === 'zh' ? (source.name_zh || source.name) : source.name);
@@ -67,19 +62,12 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
   }, [agent.id, language]);
 
   const hasDraft = !!agent.draftConfig;
-  
-  // Check for local dirty state
   const source = agent.draftConfig || agent;
-  const savedInstruction = source.systemInstruction || '';
-  const savedKB = source.knowledgeBaseId || '';
-  const savedType = source.type || 'agent';
-  const savedSubAgents = JSON.stringify(source.subAgentIds || []);
-  
   const isDirty = 
-    instruction !== savedInstruction || 
-    selectedKBId !== savedKB ||
-    type !== savedType ||
-    JSON.stringify(subAgentIds) !== savedSubAgents;
+    instruction !== source.systemInstruction || 
+    selectedKBId !== (source.knowledgeBaseId || '') ||
+    type !== (source.type || 'agent') ||
+    JSON.stringify(subAgentIds) !== JSON.stringify(source.subAgentIds || []);
 
   const handleSaveDraft = () => {
     onSaveDraft(agent.id, {
@@ -103,7 +91,6 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
     setChangeLog('');
   };
 
-  // Toggle Sub Agent Selection
   const toggleSubAgent = (id: string) => {
     if (subAgentIds.includes(id)) {
       setSubAgentIds(prev => prev.filter(aid => aid !== id));
@@ -112,8 +99,14 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
     }
   };
 
-  // Playground Handler
   const handlePlaygroundSend = async (text: string, attachments: any[]) => {
+    const baseUrl = localStorage.getItem('agno_base_url');
+    if (!baseUrl) {
+        alert("Service URL missing");
+        return;
+    }
+    const client = new AgnoClient(baseUrl, localStorage.getItem('agno_api_key') || undefined);
+
     const newUserMsg: Message = {
       id: Date.now().toString(),
       role: Role.USER,
@@ -121,18 +114,8 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
       attachments,
       timestamp: Date.now()
     };
-    const newHistory = [...playMessages, newUserMsg];
-    setPlayMessages(newHistory);
+    setPlayMessages(prev => [...prev, newUserMsg]);
     setIsPlayStreaming(true);
-
-    // Use CURRENT editor state for playground
-    const playgroundAgentConfig = {
-      ...agent,
-      systemInstruction: instruction,
-      knowledgeBaseId: selectedKBId,
-      type: type,
-      subAgentIds: subAgentIds
-    };
 
     const botMsgId = (Date.now() + 1).toString();
     setPlayMessages(prev => [...prev, {
@@ -143,26 +126,35 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
       isStreaming: true
     }]);
 
-    await streamGeminiResponse(
-      playgroundAgentConfig,
-      newHistory,
-      text,
-      attachments,
-      (chunk) => {
-        setPlayMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, text: chunk } : m));
-      },
-      (full) => {
-        setPlayMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, text: full, isStreaming: false } : m));
+    try {
+        // Create ephemeral session to test draft
+        const session = await client.createSession(agent.id, "Draft Test");
+        
+        await client.createAgentRunStream(
+            agent.id,
+            session.session_id,
+            text,
+            (chunk) => {
+                setPlayMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, text: chunk } : m));
+            },
+            (full) => {
+                setPlayMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, text: full, isStreaming: false } : m));
+                setIsPlayStreaming(false);
+            },
+            (err) => {
+                console.error(err);
+                setIsPlayStreaming(false);
+            }
+        );
+        await client.deleteSession(session.session_id);
+    } catch (e) {
+        console.error(e);
         setIsPlayStreaming(false);
-      },
-      () => setIsPlayStreaming(false),
-      allAgents // Pass all agents for tool execution in playground
-    );
+    }
   };
 
   return (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-950 absolute inset-0 z-50 overflow-hidden">
-      {/* Top Bar */}
       <div className="h-16 flex items-center justify-between px-6 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-sm shrink-0">
         <div className="flex items-center gap-4 overflow-hidden">
            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${agent.color.replace('text-', 'bg-').replace('500', '100')} dark:bg-slate-800`}>
@@ -217,12 +209,8 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
         </div>
       </div>
 
-      {/* Main Split Area - Force row layout for desktop */}
       <div className="flex-1 flex flex-row overflow-hidden min-h-0">
-        
-        {/* LEFT PANEL: Editor / Config */}
         <div className="flex-1 flex flex-col border-r border-slate-200 dark:border-slate-800 min-w-0 overflow-hidden">
-           {/* Tabs */}
            <div className="flex border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 px-4 shrink-0 overflow-x-auto no-scrollbar">
               {[
                 { id: 'config', icon: 'Settings', label: t.generalSettings },
@@ -247,7 +235,6 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
            <div className="flex-1 overflow-y-auto bg-white dark:bg-slate-900 relative">
               {activeTab === 'config' && (
                 <div className="p-6 space-y-6 max-w-3xl mx-auto">
-                   {/* Basic Info */}
                    <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{t.agentName}</label>
@@ -267,7 +254,6 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
                       </div>
                    </div>
                    
-                   {/* Agent Type Selector */}
                    <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-xl">
                       <div className="flex items-center gap-2 mb-3">
                         <Icon name="Users" size={16} className="text-primary-500" />
@@ -330,7 +316,6 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
                       )}
                    </div>
 
-                   {/* Knowledge Base Selector */}
                    <div className="p-4 bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 rounded-xl">
                       <div className="flex items-center gap-2 mb-2">
                         <Icon name="Database" size={16} className="text-primary-500" />
@@ -349,7 +334,6 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
                       />
                    </div>
 
-                   {/* Prompt Editor */}
                    <div className="flex flex-col h-[400px]">
                       <label className="flex justify-between items-center mb-2">
                         <span className="text-xs font-bold text-slate-500 uppercase">{t.systemInstruction}</span>
@@ -368,8 +352,8 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
               {activeTab === 'diff' && (
                 <div className="p-6 h-full">
                    <DiffViewer 
-                     original={agent.systemInstruction} // Live
-                     modified={instruction} // Current Draft/Editor state
+                     original={agent.systemInstruction} 
+                     modified={instruction} 
                      language={language}
                    />
                 </div>
@@ -408,7 +392,6 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
            </div>
         </div>
 
-        {/* RIGHT PANEL: Playground */}
         <div className="w-[450px] h-full flex flex-col bg-slate-50 dark:bg-black/20 border-l border-slate-200 dark:border-slate-800 shrink-0">
            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-white dark:bg-slate-900 shrink-0">
               <div className="flex items-center gap-2">
@@ -453,7 +436,6 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
         </div>
       </div>
 
-      {/* Publish Modal */}
       {showPublishModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in">
            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-md p-6">
@@ -464,7 +446,7 @@ export const AgentEditor: React.FC<AgentEditorProps> = ({
               <textarea 
                  value={changeLog}
                  onChange={e => setChangeLog(e.target.value)}
-                 className="w-full p-3 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-primary-500 h-24 resize-none mb-6 text-slate-900 dark:text-slate-100"
+                 className="w-full p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm focus:ring-2 focus:ring-primary-500 h-24 resize-none mb-6 text-slate-900 dark:text-slate-100"
                  placeholder={t.changeLogPlaceholder}
               />
               

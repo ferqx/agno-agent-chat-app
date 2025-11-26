@@ -1,7 +1,6 @@
-
 import { useState, useEffect } from 'react';
 import { EvaluationSuite, EvaluationRun, EvaluationCase, AgentConfig, TestResult } from '../types';
-import { streamGeminiResponse } from '../services/geminiService';
+import { AgnoClient } from '../lib/agno';
 import { evaluateTestCase } from '../services/evaluationService';
 
 const SUITES_KEY = 'agno_eval_suites';
@@ -53,7 +52,6 @@ export const useEvaluation = () => {
 
   const deleteSuite = (id: string) => {
     setSuites(prev => prev.filter(s => s.id !== id));
-    // Also delete associated runs
     setRuns(prev => prev.filter(r => r.suiteId !== id));
   };
 
@@ -67,26 +65,33 @@ export const useEvaluation = () => {
     const suite = suites.find(s => s.id === suiteId);
     if (!suite || suite.cases.length === 0) return;
 
+    const baseUrl = localStorage.getItem('agno_base_url');
+    const apiKey = localStorage.getItem('agno_api_key');
+    if (!baseUrl) {
+        alert("Service URL missing");
+        return;
+    }
+    const client = new AgnoClient(baseUrl, apiKey || undefined);
+
     setIsRunning(true);
     const results: TestResult[] = [];
-    
-    // We snapshot the Agent Name and Description/Version in case the Agent is deleted later.
     const runId = Date.now().toString();
     
-    // Process sequentially to avoid rate limits (in a real app, might want a pool)
     for (const testCase of suite.cases) {
       if (!testCase.input.trim()) continue;
 
       try {
         let actualOutput = "";
         
-        // 1. Generate Response (using non-streaming wrapper around the stream service for simplicity)
+        // 1. Create ephemeral session for test
+        const session = await client.createSession(agent.id, "Eval Run");
+
+        // 2. Generate Response
         await new Promise<void>((resolve) => {
-          streamGeminiResponse(
-            agent, // Use provided agent config
-            [], // No history
+          client.createAgentRunStream(
+            agent.id,
+            session.session_id,
             testCase.input,
-            [],
             () => {}, 
             (fullText) => {
               actualOutput = fullText;
@@ -99,12 +104,15 @@ export const useEvaluation = () => {
           );
         });
 
-        // 2. Judge Response
+        // 3. Cleanup Session
+        await client.deleteSession(session.session_id);
+
+        // 4. Judge Response
         const evalResult = await evaluateTestCase(
           testCase.input,
           actualOutput,
-          testCase.expectedOutput,
-          agent.systemInstruction // The logic uses the system instruction to judge relevance
+          testCase.expectedOutput || '',
+          agent.systemInstruction
         );
         
         evalResult.testCaseId = testCase.id;
@@ -115,7 +123,6 @@ export const useEvaluation = () => {
       }
     }
 
-    // Calculate Overall Score
     const totalScore = results.reduce((acc, r) => acc + r.score, 0);
     const avgScore = results.length > 0 ? Math.round(totalScore / results.length) : 0;
 
@@ -148,6 +155,6 @@ export const useEvaluation = () => {
     runSuite,
     getRunsBySuite,
     isRunning,
-    runs // exposing all runs if needed
+    runs
   };
 };

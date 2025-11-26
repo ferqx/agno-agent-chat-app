@@ -1,11 +1,10 @@
-
 import React, { useState } from 'react';
 import { AgentConfig, TestCase, TestResult } from '../types';
 import { Icon } from './Icon';
 import { translations, Language } from '../translations';
-import { streamGeminiResponse } from '../services/geminiService';
 import { evaluateTestCase } from '../services/evaluationService';
 import { StatusBadge } from './StatusBadge';
+import { AgnoClient } from '../lib/agno';
 
 interface TestLabProps {
   agent: AgentConfig;
@@ -22,9 +21,6 @@ export const TestLab: React.FC<TestLabProps> = ({ agent, testCases, onUpdateTest
   const [editExpected, setEditExpected] = useState('');
   const t = translations[language];
 
-  // Use draft instruction if available, else live
-  const currentSystemInstruction = agent.draftConfig?.systemInstruction || agent.systemInstruction;
-
   const handleAdd = () => {
     const newCase: TestCase = {
       id: Date.now().toString(),
@@ -39,7 +35,6 @@ export const TestLab: React.FC<TestLabProps> = ({ agent, testCases, onUpdateTest
 
   const handleDelete = (id: string) => {
     onUpdateTestCases(testCases.filter(c => c.id !== id));
-    // Clean up results
     const newResults = { ...results };
     delete newResults[id];
     setResults(newResults);
@@ -53,47 +48,53 @@ export const TestLab: React.FC<TestLabProps> = ({ agent, testCases, onUpdateTest
   };
 
   const runTests = async () => {
+    const baseUrl = localStorage.getItem('agno_base_url');
+    if (!baseUrl) {
+        alert("Agno Service URL is required.");
+        return;
+    }
+    
     setIsRunning(true);
+    const client = new AgnoClient(baseUrl, localStorage.getItem('agno_api_key') || undefined);
     const newResults: Record<string, TestResult> = {};
 
     for (const testCase of testCases) {
       if (!testCase.input.trim()) continue;
 
       try {
-        // 1. Generate Answer using the CURRENT (Draft) agent config
         let actualOutput = "";
         
-        // We wrap stream in a promise to get the full text
+        // Run against Agent via Agno
+        const session = await client.createSession(agent.id, "Test Lab");
+        
         await new Promise<void>((resolve, reject) => {
-           streamGeminiResponse(
-             { ...agent, systemInstruction: currentSystemInstruction }, // Use draft prompt
-             [], // No history
+           client.createAgentRunStream(
+             agent.id,
+             session.session_id,
              testCase.input,
-             [],
-             () => {}, // Ignore chunks
+             () => {}, 
              (fullText) => {
                actualOutput = fullText;
                resolve();
              },
              (err) => {
-               actualOutput = "Error generating response: " + err.message;
+               actualOutput = "Error: " + err.message;
                resolve();
              }
            );
         });
+        
+        await client.deleteSession(session.session_id);
 
-        // 2. Evaluate Answer
         const evalResult = await evaluateTestCase(
           testCase.input,
           actualOutput,
           testCase.expectedOutput,
-          currentSystemInstruction
+          agent.systemInstruction
         );
         
         evalResult.testCaseId = testCase.id;
         newResults[testCase.id] = evalResult;
-        
-        // Update results incrementally to show progress
         setResults(prev => ({ ...prev, [testCase.id]: evalResult }));
 
       } catch (e) {
@@ -109,7 +110,7 @@ export const TestLab: React.FC<TestLabProps> = ({ agent, testCases, onUpdateTest
         <div>
           <h3 className="font-bold text-slate-900 dark:text-white text-lg">{t.testLab}</h3>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            {testCases.length} cases defined. Tests run against your <span className="font-bold text-amber-600 dark:text-amber-500">Draft</span> configuration.
+            {testCases.length} cases defined.
           </p>
         </div>
         <div className="flex gap-3">

@@ -219,7 +219,9 @@ export const useChat = (
     handleSendMessage,
     handleEditMessage,
     handleDeleteMessage,
-    handleFeedback: () => {},
+    handleFeedback: (messageId: string, type: 'up' | 'down') => {
+      console.log(`Feedback for ${messageId}: ${type}`);
+    },
     handleDeleteSession,
     handleNewChat,
     handleClearChat,

@@ -1,7 +1,6 @@
-
 import { useState, useEffect } from 'react';
 import { Session, Message, Role, AgentConfig, LogEntry, KnowledgeDocument } from '../types';
-import { streamGeminiResponse } from '../services/geminiService';
+import { AgnoClient } from '../lib/agno';
 import { Language } from '../translations';
 
 export const usePlayground = (
@@ -72,6 +71,14 @@ export const usePlayground = (
   const handlePlaygroundSend = async (text: string, attachments: any[]) => {
     if (!selectedAgent || !activePlaySession) return;
     
+    const baseUrl = localStorage.getItem('agno_base_url');
+    const apiKey = localStorage.getItem('agno_api_key');
+    if (!baseUrl) {
+        alert("Please configure Agno Service URL in settings.");
+        return;
+    }
+    const client = new AgnoClient(baseUrl, apiKey || undefined);
+
     const sessionId = activePlaySession.id;
     let newTitle = activePlaySession.title;
     if (activePlaySession.messages.length === 0) {
@@ -114,48 +121,57 @@ export const usePlayground = (
       : s
     ));
 
-    await streamGeminiResponse(
-      selectedAgent,
-      [...newHistory, newUserMsg],
-      text,
-      attachments,
-      (chunk) => {
-        setPlaySessions(prev => prev.map(s => {
-          if (s.id === sessionId) {
-              const msgs = s.messages.map(m => m.id === botMsgId ? { ...m, text: chunk } : m);
-              return { ...s, messages: msgs };
-          }
-          return s;
-        }));
-      },
-      (full) => {
-        setPlaySessions(prev => prev.map(s => {
-          if (s.id === sessionId) {
-              const msgs = s.messages.map(m => m.id === botMsgId ? { ...m, text: full, isStreaming: false } : m);
-              return { ...s, messages: msgs, lastModified: Date.now() };
-          }
-          return s;
-        }));
-        setIsPlayStreaming(false);
-      },
-      () => setIsPlayStreaming(false),
-      agents,
-      documents,
-      (log) => {
-         setExecutionLogs(prev => [...prev, log]);
-         setPlaySessions(prev => prev.map(s => {
-            if (s.id === sessionId) {
-               const msgs = s.messages.map(m => 
-                 m.id === botMsgId 
-                 ? { ...m, logs: [...(m.logs || []), log] } 
-                 : m
-               );
-               return { ...s, messages: msgs };
+    // Use Agno Client for Streaming
+    // Note: We are simulating a session here. For a real "playground" against an Agno Agent,
+    // we need to create a real session on the backend or use a temporary one.
+    // Here we create a session on the fly or reuse if mapped.
+    // Since playSessions are local, let's create a temp backend session.
+    
+    try {
+        // Create a real backend session corresponding to this debug session if not tracked
+        // For simplicity, we just create a new one every time or use a consistent ID if supported
+        // Agno sessions are persistent. Let's create one for this debug run.
+        const backendSession = await client.createSession(selectedAgent.id, newTitle);
+        
+        await client.createAgentRunStream(
+            selectedAgent.id,
+            backendSession.session_id,
+            text,
+            (chunk) => {
+                setPlaySessions(prev => prev.map(s => {
+                if (s.id === sessionId) {
+                    const msgs = s.messages.map(m => m.id === botMsgId ? { ...m, text: chunk } : m);
+                    return { ...s, messages: msgs };
+                }
+                return s;
+                }));
+            },
+            (full, metrics) => {
+                setPlaySessions(prev => prev.map(s => {
+                if (s.id === sessionId) {
+                    const msgs = s.messages.map(m => m.id === botMsgId ? { ...m, text: full, isStreaming: false, metrics } : m);
+                    return { ...s, messages: msgs, lastModified: Date.now() };
+                }
+                return s;
+                }));
+                setIsPlayStreaming(false);
+            },
+            (err) => {
+                console.error(err);
+                setIsPlayStreaming(false);
+                setPlaySessions(prev => prev.map(s => {
+                    if (s.id === sessionId) {
+                        const msgs = s.messages.map(m => m.id === botMsgId ? { ...m, text: "Error: " + err.message, isStreaming: false } : m);
+                        return { ...s, messages: msgs };
+                    }
+                    return s;
+                }));
             }
-            return s;
-         }));
-      }
-    );
+        );
+    } catch (e: any) {
+        setIsPlayStreaming(false);
+        console.error("Playground Error", e);
+    }
   };
 
   return {

@@ -1,7 +1,5 @@
-
 import React, { useState } from 'react';
 import { KnowledgeDocument, RetrievalResult } from '../types';
-import { searchKnowledgeBase } from '../services/geminiService';
 import { Icon } from './Icon';
 import { translations, Language } from '../translations';
 import { StatusBadge } from './StatusBadge';
@@ -21,7 +19,17 @@ export const RagTester: React.FC<RagTesterProps> = ({ documents, language }) => 
     e.preventDefault();
     if (!query.trim()) return;
 
-    const hits = searchKnowledgeBase(query, documents);
+    // Simple client-side search simulation (contains match)
+    // In a real app, this would call an Agno/RAG endpoint if available.
+    const hits: RetrievalResult[] = documents
+      .filter(doc => doc.name.toLowerCase().includes(query.toLowerCase()))
+      .map(doc => ({
+        docId: doc.id,
+        docName: doc.name,
+        score: 85, // Mock score
+        excerpt: `Found match in ${doc.name}`
+      }));
+
     setResults(hits);
     setHasSearched(true);
   };
